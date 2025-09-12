@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (Wandering Mode)</title>
+  <title>Blob Metaball (Wandering Mode, Fixed)</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
@@ -20,12 +20,12 @@
   const INTERNAL_W = 1200, INTERNAL_H = 1200;
   const INIT_RANGE = 100, INIT_INTERVAL = 1.0, INIT_EYE_SCALE = 1.2;
   const INIT_ATTRACT = 60, INIT_REPEL = 100;
-  const INIT_MOVE_SPEED = 120.0;   // 本体の wander スピード
+  const INIT_MOVE_SPEED = 120.0;
 
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
 
-  // ===== シェーダ（WebGL1記法）=====
+  // ===== シェーダ =====
   const VERT = `
     precision highp float;
     attribute vec3 position;
@@ -73,7 +73,7 @@
     }
   `;
 
-  // ===== Blob =====
+  // ===== Blob クラス =====
   class Blob {
     constructor(n=14, color=new THREE.Vector3(1,0,0), pos=new THREE.Vector2(INTERNAL_W/2, INTERNAL_H/2)){
       this.num_circles = n;
@@ -109,7 +109,7 @@
       this.eye_scale = INIT_EYE_SCALE;
       this.move_speed = INIT_MOVE_SPEED;
 
-      // === 本体 wander 用 ===
+      // 本体 wander 用
       this.blob_target = pos.clone();
       this.blob_timer  = rand(3, 7);
     }
@@ -145,7 +145,7 @@
       if(d>1e-3){
         const step = Math.min(this.move_speed*dt*0.5, d);
         const move = new THREE.Vector2(dx/d*step, dy/d*step);
-        this.apply_force(move);  // ★ 全体を移動させる
+        this.apply_force(move);
       }
 
       // === パーツのうねり ===
@@ -233,7 +233,7 @@
           pupil_center:{ value:new THREE.Vector2(0,0) },
           pupil_radius:{ value:0.0 },
           pupil_color:{ value:new THREE.Vector3(0,0,0) },
-          resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) },
+          resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) }  // ★修正済み
         }
       });
       this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), this.material);
@@ -254,6 +254,7 @@
       this.material.uniforms.pupil_center.value.copy(u.pupil_center);
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
       this.material.uniforms.pupil_color.value.copy(u.pupil_color);
+      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H); // ★更新
     }
   }
 
@@ -293,7 +294,7 @@
   pane.addBinding(params,'repel',{min:0,max:150,step:1});
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1});
 
-  // ===== 当たり判定（引力/斥力）=====
+  // ===== 当たり判定 =====
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
