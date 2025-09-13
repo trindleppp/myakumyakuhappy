@@ -321,12 +321,12 @@
   // ===== UI =====
   const pane=new Pane({title:'Controls'});
   const params={ 
-    eye_range:29,
-    interval:1.0,
+    eye_range:30,
+    interval:1.5,
     eye_scale:1.4,
-    attract:0,
+    attract:10,
     repel:10,
-    move_speed:96,
+    move_speed:100,
     cohesion:1.0
   };
   pane.addBinding(params,'eye_range',{min:10,max:200,step:1});
