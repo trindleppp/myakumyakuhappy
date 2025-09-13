@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (Cohesion + Pupil Rules, Clean)</title>
+  <title>Blob Metaball (Tighter Cohesion)</title>
   <style>
-    html,body { margin:0; height:100%; background:#fff; } /* 余白も白に */
+    html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
   </style>
 </head>
@@ -13,8 +13,8 @@
   <div id="app"></div>
 
   <script type="module">
-  import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js?v=1";
-  import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js?v=1";
+  import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+  import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js";
 
   // ===== 設定 =====
   const INTERNAL_W = 1200, INTERNAL_H = 1200;
@@ -24,10 +24,8 @@
 
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
-  const nearly = (a,b)=> Math.abs(a-b) < 1e-6;
-  const isColor = (v,x,y,z)=> nearly(v.x,x) && nearly(v.y,y) && nearly(v.z,z);
 
-  // ===== シェーダ（WebGL1）=====
+  // ===== シェーダ =====
   const VERT = `
     precision highp float;
     attribute vec3 position;
@@ -56,7 +54,6 @@
 
     void main(){
         vec2 uv = vUv * resolution;
-
         float field = 0.0;
         for(int i=0;i<32;i++){
             if(i >= num_circles) break;
@@ -65,16 +62,13 @@
             float r = radii[i];
             field += (r*r) / d2;
         }
-
         if(field <= 0.8){ discard; }
 
         if(length(uv - pupil_center) < pupil_radius){
-            gl_FragColor = vec4(pupil_color, 1.0);
-            return;
+            gl_FragColor = vec4(pupil_color, 1.0); return;
         }
         if(length(uv - eye_center) < eye_radius){
-            gl_FragColor = vec4(eye_color, 1.0);
-            return;
+            gl_FragColor = vec4(eye_color, 1.0); return;
         }
         gl_FragColor = vec4(blob_color, 1.0);
     }
@@ -86,13 +80,13 @@
       this.num_circles = n;
       this.color = color;
 
-      // pupil_color を色に応じて固定（誤差OKな判定）
-      if (isColor(color, 1,0,0)) {                 // 赤
-        this.pupil_color = new THREE.Vector3(0,0,1);     // 青
-      } else if (isColor(color, 0,0,1)) {          // 青
-        this.pupil_color = new THREE.Vector3(1,0,0);     // 赤
-      } else if (isColor(color, 0.6,0,0.8)) {      // 紫
-        this.pupil_color = new THREE.Vector3(0,1,0.6);   // エメラルドグリーン
+      // pupil_color 固定ルール
+      if(color.equals(new THREE.Vector3(1,0,0))){           // 赤
+        this.pupil_color = new THREE.Vector3(0,0,1);        // 青
+      } else if(color.equals(new THREE.Vector3(0,0,1))){    // 青
+        this.pupil_color = new THREE.Vector3(1,0,0);        // 赤
+      } else if(color.equals(new THREE.Vector3(0.6,0,0.8))){// 紫
+        this.pupil_color = new THREE.Vector3(0,1,0.6);      // エメラルドグリーン
       } else {
         this.pupil_color = new THREE.Vector3(1-color.x, 1-color.y, 1-color.z);
       }
@@ -128,9 +122,6 @@
 
       this.blob_target = pos.clone();
       this.blob_timer  = rand(3, 7);
-
-      // まとまり度（外部依存を避け、プロパティで持つ）
-      this.cohesion = 1.0;
     }
 
     estimate_radius(){
@@ -141,7 +132,7 @@
       let r=0;
       for(let i=0;i<this.num_circles;i++){
         const v=this.centers[i].clone().sub(center);
-        r=Math.max(r, v.length()+this.radii[i]);
+        r=Math.max(r,v.length()+this.radii[i]);
       }
       return { r, center };
     }
@@ -151,8 +142,8 @@
       for(let i=0;i<this.num_circles;i++) this.centers[i].add(f);
     }
 
-    update(dt){
-      // 全体 wander
+    update(dt, cohesion){
+      // wander
       this.blob_timer -= dt;
       if(this.blob_timer <= 0){
         this.blob_target.set(rand(0,INTERNAL_W), rand(0,INTERNAL_H));
@@ -188,10 +179,8 @@
         }
       }
 
-      // 半径・中心を一度だけ計算して使い回す
-      const { r: r_est, center } = this.estimate_radius();
-
       // 目と瞳
+      const { r: r_est, center } = this.estimate_radius();
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
 
@@ -211,22 +200,39 @@
         this.pupil_timer=rand(1,3);
       }
       this.pupil_pos.add(this.pupil_target.clone().sub(this.pupil_pos).multiplyScalar(0.05));
-
       const v=this.pupil_pos.clone().sub(this.eye_pos);
       if(v.length()>(eye_r-pupil_r)){
         v.setLength(Math.max(eye_r-pupil_r,0));
         this.pupil_pos.copy(this.eye_pos).add(v);
       }
 
-      // cohesion（まとまり補正）: 外部変数参照せず this.cohesion を使用
+      // === cohesion ===
+      // 中心への引力
       for(let i=0;i<this.num_circles;i++){
         const dx = center.x - this.centers[i].x;
         const dy = center.y - this.centers[i].y;
         const dist = Math.hypot(dx,dy);
-        if(dist > 50){
-          const step = Math.min(this.move_speed*dt*0.2*this.cohesion, dist);
+        if(dist > 20){
+          const step = Math.min(this.move_speed*dt*0.4*cohesion, dist);
           this.centers[i].x += dx/dist*step;
           this.centers[i].y += dy/dist*step;
+        }
+      }
+      // サブ円同士のcohesion
+      for(let i=0;i<this.num_circles;i++){
+        for(let j=i+1;j<this.num_circles;j++){
+          const dx = this.centers[j].x - this.centers[i].x;
+          const dy = this.centers[j].y - this.centers[i].y;
+          const d = Math.hypot(dx,dy);
+          if(d > 60){
+            const step = Math.min(this.move_speed*dt*0.05*cohesion, d-60);
+            const fx = dx/d * step;
+            const fy = dy/d * step;
+            this.centers[i].x += fx;
+            this.centers[i].y += fy;
+            this.centers[j].x -= fx;
+            this.centers[j].y -= fy;
+          }
         }
       }
     }
@@ -290,19 +296,17 @@
       this.material.uniforms.pupil_center.value.copy(u.pupil_center);
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
       this.material.uniforms.pupil_color.value.copy(u.pupil_color);
-      // resolution は固定。LOW POWER切替を入れるならここで更新。
+      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
     }
   }
 
-  // ===== Three.js 基本 =====
+  // ===== Three.js セットアップ =====
   const container = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
   container.appendChild(renderer.domElement);
   const cap = /iPhone|Android/i.test(navigator.userAgent) ? 1.5 : 2.0;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap));
   renderer.setClearColor(0xffffff, 1);
-  renderer.debug.checkShaderErrors = true;
-
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
 
@@ -310,10 +314,10 @@
     const s = Math.min(window.innerWidth, window.innerHeight);
     renderer.setSize(s, s);
   }
-  window.addEventListener('resize', resize, { passive:true });
+  window.addEventListener('resize', resize);
   resize();
 
-  // ===== Blobs =====
+  // ===== Blob 生成 =====
   const blobs = [
     new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.3, INTERNAL_H*0.6)),
     new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.7, INTERNAL_H*0.7)),
@@ -324,7 +328,7 @@
 
   // ===== UI =====
   const pane=new Pane({title:'Controls'});
-  const params={
+  const params={ 
     eye_range:INIT_RANGE, interval:INIT_INTERVAL, eye_scale:INIT_EYE_SCALE,
     attract:INIT_ATTRACT, repel:INIT_REPEL, move_speed:INIT_MOVE_SPEED,
     cohesion:1.0
@@ -337,7 +341,7 @@
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1});
   pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1});
 
-  // ===== Forces（当たり判定）=====
+  // ===== 当たり判定 =====
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -368,25 +372,21 @@
     const dt = Math.min(0.05, (now-last)/1000);
     last = now;
 
-    // UI値を各Blobへ注入（隠れ依存を避ける）
     for(const b of blobs){
-      b.eye_range   = params.eye_range;
-      b.max_interval= params.interval;
-      b.eye_scale   = params.eye_scale;
-      b.move_speed  = params.move_speed;
-      b.cohesion    = params.cohesion;
-      b.update(dt);
+      b.eye_range = params.eye_range;
+      b.max_interval = params.interval;
+      b.eye_scale = params.eye_scale;
+      b.move_speed = params.move_speed;
+      b.update(dt, params.cohesion);
     }
-
     for(let i=0;i<blobs.length;i++){
       for(let j=i+1;j<blobs.length;j++){
         applyForces(blobs[i],blobs[j],dt,params.attract,params.repel);
       }
     }
-
     for(let i=0;i<blobs.length;i++) renderers[i].updateFromBlob(blobs[i]);
 
-    renderer.render(scene,camera);
+    renderer.render(scene, camera);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
