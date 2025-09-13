@@ -3,33 +3,31 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (Wandering, Pages-safe)</title>
-  <meta name="color-scheme" content="light">
+  <title>Blob Metaball (Cohesion + Pupil Rules, Clean)</title>
   <style>
-    html,body { margin:0; height:100%; background:#111; }
+    html,body { margin:0; height:100%; background:#fff; } /* 余白も白に */
     #app { position:fixed; inset:0; display:grid; place-items:center; }
-    /* GitHub Pagesでフォント周りに左右されないよう念のため */
-    * { box-sizing: border-box; }
   </style>
 </head>
 <body>
   <div id="app"></div>
 
   <script type="module">
-  // 依存はESMをhttps経由で。バージョン固定、かつURL末尾にダミークエリを付けてキャッシュ事故を避ける
   import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js?v=1";
   import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js?v=1";
 
-  // ========= 設定 =========
-  const INTERNAL_W = 1200, INTERNAL_H = 1200;     // シミュレーション解像度（描画は等倍で使う）
+  // ===== 設定 =====
+  const INTERNAL_W = 1200, INTERNAL_H = 1200;
   const INIT_RANGE = 100, INIT_INTERVAL = 1.0, INIT_EYE_SCALE = 1.2;
   const INIT_ATTRACT = 60, INIT_REPEL = 100;
   const INIT_MOVE_SPEED = 120.0;
 
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
+  const nearly = (a,b)=> Math.abs(a-b) < 1e-6;
+  const isColor = (v,x,y,z)=> nearly(v.x,x) && nearly(v.y,y) && nearly(v.z,z);
 
-  // ========= シェーダ（WebGL1書式）=========
+  // ===== シェーダ（WebGL1）=====
   const VERT = `
     precision highp float;
     attribute vec3 position;
@@ -82,13 +80,22 @@
     }
   `;
 
-  // ========= Blob =========
+  // ===== Blob =====
   class Blob {
     constructor(n=14, color=new THREE.Vector3(1,0,0), pos=new THREE.Vector2(INTERNAL_W/2, INTERNAL_H/2)){
       this.num_circles = n;
       this.color = color;
-      // 反対色ベース
-      this.pupil_color = new THREE.Vector3(1-color.x, 1-color.y, 1-color.z);
+
+      // pupil_color を色に応じて固定（誤差OKな判定）
+      if (isColor(color, 1,0,0)) {                 // 赤
+        this.pupil_color = new THREE.Vector3(0,0,1);     // 青
+      } else if (isColor(color, 0,0,1)) {          // 青
+        this.pupil_color = new THREE.Vector3(1,0,0);     // 赤
+      } else if (isColor(color, 0.6,0,0.8)) {      // 紫
+        this.pupil_color = new THREE.Vector3(0,1,0.6);   // エメラルドグリーン
+      } else {
+        this.pupil_color = new THREE.Vector3(1-color.x, 1-color.y, 1-color.z);
+      }
 
       this.centers = Array.from({length:32}, ()=> new THREE.Vector2(pos.x,pos.y));
       this.radii   = new Float32Array(32);
@@ -119,9 +126,11 @@
       this.eye_scale = INIT_EYE_SCALE;
       this.move_speed = INIT_MOVE_SPEED;
 
-      // Blob全体のwander
       this.blob_target = pos.clone();
       this.blob_timer  = rand(3, 7);
+
+      // まとまり度（外部依存を避け、プロパティで持つ）
+      this.cohesion = 1.0;
     }
 
     estimate_radius(){
@@ -179,8 +188,10 @@
         }
       }
 
-      // 目と瞳
+      // 半径・中心を一度だけ計算して使い回す
       const { r: r_est, center } = this.estimate_radius();
+
+      // 目と瞳
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
 
@@ -206,6 +217,18 @@
         v.setLength(Math.max(eye_r-pupil_r,0));
         this.pupil_pos.copy(this.eye_pos).add(v);
       }
+
+      // cohesion（まとまり補正）: 外部変数参照せず this.cohesion を使用
+      for(let i=0;i<this.num_circles;i++){
+        const dx = center.x - this.centers[i].x;
+        const dy = center.y - this.centers[i].y;
+        const dist = Math.hypot(dx,dy);
+        if(dist > 50){
+          const step = Math.min(this.move_speed*dt*0.2*this.cohesion, dist);
+          this.centers[i].x += dx/dist*step;
+          this.centers[i].y += dy/dist*step;
+        }
+      }
     }
 
     uniforms(){
@@ -226,7 +249,7 @@
     }
   }
 
-  // ========= BlobRenderer =========
+  // ===== BlobRenderer =====
   class BlobRenderer {
     constructor(){
       this.material = new THREE.RawShaderMaterial({
@@ -236,17 +259,17 @@
         depthTest: false,
         depthWrite: false,
         uniforms: {
-          centers:     { value:Array.from({length:32},()=>new THREE.Vector2(0,0)) },
-          radii:       { value:Array.from({length:32},()=>0.0) },
-          num_circles: { value:0 },
-          blob_color:  { value:new THREE.Vector3(1,0,0) },
-          eye_center:  { value:new THREE.Vector2(0,0) },
-          eye_radius:  { value:0.0 },
-          eye_color:   { value:new THREE.Vector3(1,1,1) },
+          centers:{ value:Array.from({length:32},()=>new THREE.Vector2(0,0)) },
+          radii:{ value:Array.from({length:32},()=>0.0) },
+          num_circles:{ value:0 },
+          blob_color:{ value:new THREE.Vector3(1,0,0) },
+          eye_center:{ value:new THREE.Vector2(0,0) },
+          eye_radius:{ value:0.0 },
+          eye_color:{ value:new THREE.Vector3(1,1,1) },
           pupil_center:{ value:new THREE.Vector2(0,0) },
           pupil_radius:{ value:0.0 },
-          pupil_color: { value:new THREE.Vector3(0,0,0) },
-          resolution:  { value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) } // Pagesで忘れると真っ暗
+          pupil_color:{ value:new THREE.Vector3(0,0,0) },
+          resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) }
         }
       });
       this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), this.material);
@@ -267,21 +290,18 @@
       this.material.uniforms.pupil_center.value.copy(u.pupil_center);
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
       this.material.uniforms.pupil_color.value.copy(u.pupil_color);
-      // resolution は固定だが、将来LOW POWER切替するならここで更新
-      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
+      // resolution は固定。LOW POWER切替を入れるならここで更新。
     }
   }
 
-  // ========= Three.js 基本 =========
+  // ===== Three.js 基本 =====
   const container = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
   container.appendChild(renderer.domElement);
-
-  // モバイル負荷対策：上限1.5
   const cap = /iPhone|Android/i.test(navigator.userAgent) ? 1.5 : 2.0;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap));
   renderer.setClearColor(0xffffff, 1);
-  renderer.debug.checkShaderErrors = true; // シェーダ失敗時にしっかり赤エラー出す
+  renderer.debug.checkShaderErrors = true;
 
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
@@ -293,20 +313,21 @@
   window.addEventListener('resize', resize, { passive:true });
   resize();
 
-  // ========= 3体生成 =========
+  // ===== Blobs =====
   const blobs = [
-    new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.30, INTERNAL_H*0.60)),
-    new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.70, INTERNAL_H*0.70)),
-    new Blob(14,new THREE.Vector3(0.6,0,0.8), new THREE.Vector2(INTERNAL_W*0.50, INTERNAL_H*0.40)),
+    new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.3, INTERNAL_H*0.6)),
+    new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.7, INTERNAL_H*0.7)),
+    new Blob(14,new THREE.Vector3(0.6,0,0.8), new THREE.Vector2(INTERNAL_W*0.5, INTERNAL_H*0.4)),
   ];
   const renderers = blobs.map(()=> new BlobRenderer());
-  renderers.forEach(r=> scene.add(r.mesh)); // 追加順＝前後順（最後が最前面）
+  renderers.forEach(r=> scene.add(r.mesh));
 
-  // ========= UI =========
-  const pane = new Pane({ title:'Controls' });
-  const params = {
+  // ===== UI =====
+  const pane=new Pane({title:'Controls'});
+  const params={
     eye_range:INIT_RANGE, interval:INIT_INTERVAL, eye_scale:INIT_EYE_SCALE,
-    attract:INIT_ATTRACT, repel:INIT_REPEL, move_speed:INIT_MOVE_SPEED
+    attract:INIT_ATTRACT, repel:INIT_REPEL, move_speed:INIT_MOVE_SPEED,
+    cohesion:1.0
   };
   pane.addBinding(params,'eye_range',{min:10,max:200,step:1});
   pane.addBinding(params,'interval',{min:0.5,max:5,step:0.1});
@@ -314,8 +335,9 @@
   pane.addBinding(params,'attract',{min:0,max:100,step:1});
   pane.addBinding(params,'repel',{min:0,max:150,step:1});
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1});
+  pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1});
 
-  // ========= 物理（引力/斥力）=========
+  // ===== Forces（当たり判定）=====
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -340,35 +362,34 @@
     }
   }
 
-  // ========= ループ =========
+  // ===== ループ =====
   let last = performance.now();
   function tick(now){
     const dt = Math.min(0.05, (now-last)/1000);
     last = now;
 
+    // UI値を各Blobへ注入（隠れ依存を避ける）
     for(const b of blobs){
-      b.eye_range = params.eye_range;
-      b.max_interval = params.interval;
-      b.eye_scale = params.eye_scale;
-      b.move_speed = params.move_speed;
+      b.eye_range   = params.eye_range;
+      b.max_interval= params.interval;
+      b.eye_scale   = params.eye_scale;
+      b.move_speed  = params.move_speed;
+      b.cohesion    = params.cohesion;
       b.update(dt);
     }
+
     for(let i=0;i<blobs.length;i++){
       for(let j=i+1;j<blobs.length;j++){
         applyForces(blobs[i],blobs[j],dt,params.attract,params.repel);
       }
     }
+
     for(let i=0;i<blobs.length;i++) renderers[i].updateFromBlob(blobs[i]);
 
-    renderer.render(scene, camera);
+    renderer.render(scene,camera);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
-
-  // ========= 最低限のデバッグ（真っ暗病の特効薬）=========
-  window.addEventListener('error', e => {
-    console.error('JS Error:', e.message, e.filename, e.lineno, e.colno);
-  });
   </script>
 </body>
 </html>
