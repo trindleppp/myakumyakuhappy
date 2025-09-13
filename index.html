@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (Cohesion=2.0)</title>
+  <title>Blob Metaball (Fixed Eye Colors)</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
@@ -76,12 +76,13 @@
       this.num_circles = n;
       this.color = color;
 
+      // --- 瞳の色を固定設定 ---
       if(color.equals(new THREE.Vector3(1,0,0))){           
-        this.pupil_color = new THREE.Vector3(0,0,1);        
+        this.pupil_color = new THREE.Vector3(0,0,1);        // 赤Blob → 青瞳
       } else if(color.equals(new THREE.Vector3(0,0,1))){    
-        this.pupil_color = new THREE.Vector3(1,0,0);        
+        this.pupil_color = new THREE.Vector3(1,0,0);        // 青Blob → 赤瞳
       } else if(color.equals(new THREE.Vector3(0.6,0,0.8))){
-        this.pupil_color = new THREE.Vector3(0,1,0.6);      
+        this.pupil_color = new THREE.Vector3(0,1,0.6);      // 紫Blob → エメラルドグリーン瞳
       } else {
         this.pupil_color = new THREE.Vector3(1-color.x, 1-color.y, 1-color.z);
       }
@@ -388,4 +389,4 @@
   requestAnimationFrame(tick);
   </script>
 </body>
-</html>
+  </html>
