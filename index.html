@@ -3,37 +3,51 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (All Fixed Stable Selective Bloom)</title>
+  <title>Blob Metaball Gold (Spherical Highlight + Outer Glow) — importmap fixed</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
-    #randomColorBtn{
-      position:fixed; bottom:12px; left:50%; transform:translateX(-50%);
-      padding:12px 22px; font-size:16px; font-weight:700; color:#fff;
-      border:2px solid #c7a0ff; border-radius:12px; cursor:pointer;
-      background:linear-gradient(135deg,#fff,#000);
-      box-shadow:0 8px 28px rgba(199,160,255,0.25); z-index:20;
+    #colorButton {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      border: 2px solid #c7a0ff;
+      border-radius: 12px;
+      background: linear-gradient(135deg,#fff,#000);
+      color: #fff;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 20;
+      box-shadow: 0 6px 24px rgba(199,160,255,0.25);
     }
-    #randomColorBtn:hover{ background:linear-gradient(135deg,#eee,#333); }
+    #colorButton:hover { background: linear-gradient(135deg,#eee,#333); }
   </style>
+
+  <!-- import map: resolve bare specifier 'three' -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
 </head>
 <body>
   <div id="app"></div>
-  <button id="randomColorBtn">ランダムカラー</button>
+  <button id="colorButton">ランダムカラー</button>
 
   <script type="module">
- import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-  import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js";
-  import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js";
-  import { ShaderPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js";
-  import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js";
+  import * as THREE from "three";
+  import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js";
 
   // ===== Settings =====
   const INTERNAL_W = 1200, INTERNAL_H = 1200;
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
   const chance = p => Math.random() < p;
-  const BLOOM_LAYER = 1;
 
   // ===== Shaders =====
   const VERT = `
@@ -45,6 +59,8 @@
       gl_Position = vec4(position, 1.0);
     }
   `;
+
+  // Body shader (with spherical gold highlight)
   const FRAG = `
     precision highp float;
     varying vec2 vUv;
@@ -66,6 +82,7 @@
     void main(){
         vec2 uv = vUv * resolution;
 
+        // metaball field
         float field = 0.0;
         for(int i=0;i<32;i++){
             if(i >= num_circles) break;
@@ -91,7 +108,7 @@
             return;
         }
 
-        // sclera
+        // sclera (white)
         if(length(uv - eye_center) < eye_radius){
             gl_FragColor = vec4(eye_color, 1.0);
             return;
@@ -99,6 +116,7 @@
 
         // body
         if(is_gold==1){
+            // spherical highlight centered at the eye
             vec2 rel = (uv - eye_center) / max(eye_radius, 1.0);
             float r2 = dot(rel, rel);
             float z = sqrt(max(0.0, 1.0 - min(r2, 1.0)));
@@ -124,24 +142,58 @@
     }
   `;
 
-  // final additive combine (tDiffuse is previous pass)
-  const AddShader = {
-    uniforms: { tDiffuse: { value: null }, tBloom: { value: null } },
-    vertexShader: `
-      varying vec2 vUv;
-      void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }
-    `,
-    fragmentShader: `
-      varying vec2 vUv;
-      uniform sampler2D tDiffuse;
-      uniform sampler2D tBloom;
-      void main(){
-        vec4 base  = texture2D(tDiffuse, vUv);
-        vec4 bloom = texture2D(tBloom,   vUv);
-        gl_FragColor = base + bloom;
-      }
-    `
-  };
+  // Glow shader (gold-only outer halo)
+  const FRAG_GLOW = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform vec2 centers[32];
+    uniform float radii[32];
+    uniform int num_circles;
+    uniform vec2 resolution;
+    uniform int is_gold;
+    uniform vec2 eye_center;
+    uniform float eye_radius;
+
+    void main(){
+        vec2 uv = vUv * resolution;
+
+        // metaball field
+        float field = 0.0;
+        for(int i=0;i<32;i++){
+            if(i >= num_circles) break;
+            vec2 d = uv - centers[i];
+            float d2 = dot(d,d) + 1.0;
+            float r = radii[i];
+            field += (r*r) / d2;
+        }
+
+        // Only draw outside the iso-surface; build a falloff ring just outside
+        float iso = 0.8;
+        if(field >= iso){ discard; }  // inside body: no glow from this pass
+
+        // distance from edge in field space
+        float d = iso - field; // >0 outside
+        // falloff width in field units (tweakable)
+        float w1 = 0.10;
+        float w2 = 0.40;
+        float ring = smoothstep(w2, w1, d);   // 1 near edge, 0 farther
+        if(ring <= 0.001){ discard; }
+
+        // radial falloff from the eye center, so glow concentrates near the blob
+        float r = length(uv - eye_center) / max(eye_radius*2.0, 1.0);
+        float radial = clamp(1.0 - r, 0.0, 1.0);
+
+        float alpha = ring * radial * 0.7;   // intensity
+
+        // gold-ish halo color
+        vec3 halo = vec3(1.0, 0.92, 0.55);
+
+        // Only gold blobs emit glow
+        if(is_gold == 0){ discard; }
+
+        gl_FragColor = vec4(halo, alpha);
+    }
+  `;
 
   // ===== Blob =====
   class Blob {
@@ -150,14 +202,15 @@
       this.color = color;
       this.is_gold = 0;
 
+      // pupil color rules
       if(color.equals(new THREE.Vector3(1,0,0))){
-        this.pupil_color = new THREE.Vector3(0,0,1);
+        this.pupil_color = new THREE.Vector3(0,0,1);       // red -> blue
       } else if(color.equals(new THREE.Vector3(0,0,1))){
-        this.pupil_color = new THREE.Vector3(1,0,0);
+        this.pupil_color = new THREE.Vector3(1,0,0);       // blue -> red
       } else if(color.equals(new THREE.Vector3(0.6,0,0.8))){
-        this.pupil_color = new THREE.Vector3(0,1,0.6);
+        this.pupil_color = new THREE.Vector3(0,1,0.6);     // purple -> emerald
       } else {
-        this.pupil_color = new THREE.Vector3(1-color.x,1-color.y,1-color.z);
+        this.pupil_color = new THREE.Vector3(1-color.x,1-color.y,1-color.z); // complement
       }
 
       this.centers = Array.from({length:32}, ()=> new THREE.Vector2(pos.x,pos.y));
@@ -228,7 +281,7 @@
     }
 
     update(dt, cohesion){
-      // wander
+      // wander target
       this.blob_timer -= dt;
       if(this.blob_timer <= 0){
         this.blob_target.set(rand(0,INTERNAL_W), rand(0,INTERNAL_H));
@@ -240,11 +293,12 @@
         const d=Math.hypot(dx,dy);
         if(d>1e-3){
           const step = Math.min(this.move_speed*dt*0.5, d);
-          this.apply_force(new THREE.Vector2(dx/d*step, dy/d*step));
+          const move = new THREE.Vector2(dx/d*step, dy/d*step);
+          this.apply_force(move);
         }
       }
 
-      // parts wobble
+      // per-circle wobble
       for(let i=0;i<this.num_circles;i++){
         this.phase[i]+=this.speed[i]*dt;
         this.radii[i]=Math.max(2,this.base_r[i]+20*Math.sin(this.phase[i]));
@@ -263,7 +317,7 @@
         }
       }
 
-      // eye & pupil
+      // eye / pupil logic
       const { r: r_est, center } = this.estimate_radius();
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
@@ -290,7 +344,7 @@
         this.pupil_pos.copy(this.eye_pos).add(v);
       }
 
-      // cohesion
+      // cohesion toward center
       for(let i=0;i<this.num_circles;i++){
         const dx = center.x - this.centers[i].x;
         const dy = center.y - this.centers[i].y;
@@ -322,6 +376,7 @@
     }
   }
 
+  // ===== Renderers =====
   class BlobRenderer {
     constructor(){
       this.material = new THREE.RawShaderMaterial({
@@ -368,6 +423,43 @@
     }
   }
 
+  class GlowRenderer {
+    constructor(){
+      this.material = new THREE.RawShaderMaterial({
+        vertexShader: VERT,
+        fragmentShader: FRAG_GLOW,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.NormalBlending,   // mix with white background
+        uniforms: {
+          centers:{ value:Array.from({length:32},()=>new THREE.Vector2(0,0)) },
+          radii:{ value:Array.from({length:32},()=>0.0) },
+          num_circles:{ value:0 },
+          resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) },
+          is_gold:{ value:0 },
+          eye_center:{ value:new THREE.Vector2(0,0) },
+          eye_radius:{ value:0.0 }
+        }
+      });
+      this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), this.material);
+    }
+    updateFromBlob(blob){
+      const u=blob.uniforms();
+      this.material.uniforms.num_circles.value=u.num_circles;
+      const centers=this.material.uniforms.centers.value;
+      const radii=this.material.uniforms.radii.value;
+      for(let i=0;i<32;i++){
+        if(i<u.num_circles){ centers[i].copy(u.centers[i]); radii[i]=u.radii[i]; }
+        else { centers[i].set(0,0); radii[i]=0.0; }
+      }
+      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
+      this.material.uniforms.is_gold.value=u.is_gold;
+      this.material.uniforms.eye_center.value.copy(u.eye_center);
+      this.material.uniforms.eye_radius.value=u.eye_radius;
+    }
+  }
+
   // ===== Setup =====
   const container = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
@@ -376,65 +468,33 @@
   renderer.setClearColor(0xffffff, 1);
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  function resize(){ const s=Math.min(window.innerWidth,window.innerHeight); renderer.setSize(s,s); }
+  window.addEventListener('resize', resize); resize();
 
-  // blobs
   const blobs = [
     new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.3, INTERNAL_H*0.6)),
     new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.7, INTERNAL_H*0.7)),
     new Blob(14,new THREE.Vector3(0.6,0,0.8), new THREE.Vector2(INTERNAL_W*0.5, INTERNAL_H*0.4)),
   ];
-  const renderers = blobs.map(()=> new BlobRenderer());
-  renderers.forEach(r=> scene.add(r.mesh));
+  const bodyRenderers = blobs.map(()=> new BlobRenderer());
+  const glowRenderers = blobs.map(()=> new GlowRenderer());
 
-  // layers for selective bloom
-  const bloomLayer = new THREE.Layers(); bloomLayer.set(BLOOM_LAYER);
-  function isBloomObject(obj){ return bloomLayer.test(obj.layers); }
+  // Draw order: glow then body
+  glowRenderers.forEach(r=> scene.add(r.mesh));
+  bodyRenderers.forEach(r=> scene.add(r.mesh));
 
-  // composers
-  const bloomComposer = new EffectComposer(renderer); // gold-only extraction
-  const bloomRenderPass = new RenderPass(scene, camera);
-  const unrealBloom = new UnrealBloomPass(new THREE.Vector2(1024,1024), 1.1, 0.4, 0.85);
-  bloomComposer.addPass(bloomRenderPass);
-  bloomComposer.addPass(unrealBloom);
+  // UI
+  const pane=new Pane({title:'Controls'});
+  const params={ eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:1.5 };
+  pane.addBinding(params,'eye_range',{min:10,max:200,step:1,label:'目の範囲'});
+  pane.addBinding(params,'interval',{min:0.5,max:5,step:0.1,label:'目移動間隔'});
+  pane.addBinding(params,'eye_scale',{min:1,max:3,step:0.05,label:'目サイズ'});
+  pane.addBinding(params,'attract',{min:0,max:100,step:1,label:'引力'});
+  pane.addBinding(params,'repel',{min:0,max:150,step:1,label:'斥力'});
+  pane.addBinding(params,'move_speed',{min:20,max:200,step:1,label:'移動速度'});
+  pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1,label:'まとまり'});
 
-  const finalComposer = new EffectComposer(renderer); // base + add bloom => screen
-  finalComposer.renderToScreen = true;
-  const basePass = new RenderPass(scene, camera);
-  finalComposer.addPass(basePass);
-  const addPass = new ShaderPass(AddShader); // tDiffuse will be previous pass (base)
-  const bloomTex = (bloomComposer.readBuffer ? bloomComposer.readBuffer.texture : (bloomComposer.renderTarget2 ? bloomComposer.renderTarget2.texture : bloomComposer.writeBuffer.texture));
-  addPass.uniforms.tBloom.value = bloomTex;
-  addPass.renderToScreen = true;
-  finalComposer.addPass(addPass);
-
-  // darken non-bloom during bloom render
-  const darkMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, depthWrite:false });
-  darkMaterial.blending = THREE.NoBlending;
-  const materials = {};
-  function darkenNonBloomed(obj){
-    if(obj.isMesh && !isBloomObject(obj)){
-      materials[obj.uuid] = obj.material;
-      obj.material = darkMaterial;
-    }
-  }
-  function restoreMaterials(obj){
-    if(materials[obj.uuid]){
-      obj.material = materials[obj.uuid];
-      delete materials[obj.uuid];
-    }
-  }
-
-  // resize
-  function setSize(){
-    const s=Math.min(window.innerWidth,window.innerHeight);
-    renderer.setSize(s,s);
-    bloomComposer.setSize(s,s);
-    finalComposer.setSize(s,s);
-  }
-  window.addEventListener('resize', setSize);
-  setSize();
-
-  // forces
+  // inter-blob forces
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -457,49 +517,44 @@
     }
   }
 
-  // params (fixed for stability-first)
-  const params = { eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:1.5 };
-
   // loop
   let last=performance.now();
   function tick(now){
     const dt=Math.min(0.05,(now-last)/1000); last=now;
-    for(let i=0;i<blobs.length;i++){
-      const b=blobs[i];
+    for(const b of blobs){
       b.max_interval = params.interval;
-      b.eye_range    = params.eye_range;
-      b.eye_scale    = params.eye_scale;
-      b.move_speed   = params.move_speed;
+      b.eye_range = params.eye_range;
+      b.eye_scale = params.eye_scale;
+      b.move_speed = params.move_speed;
       b.update(dt, params.cohesion);
-      if(b.is_gold) renderers[i].mesh.layers.enable(BLOOM_LAYER);
-      else          renderers[i].mesh.layers.disable(BLOOM_LAYER);
     }
     for(let i=0;i<blobs.length;i++){
       for(let j=i+1;j<blobs.length;j++){
         applyForces(blobs[i],blobs[j],dt,params.attract,params.repel);
       }
     }
-    for(let i=0;i<blobs.length;i++) renderers[i].updateFromBlob(blobs[i]);
-
-    // render bloom-only
-    scene.traverse(darkenNonBloomed);
-    bloomComposer.render();
-    scene.traverse(restoreMaterials);
-
-    // render base + add bloom (to screen)
-    finalComposer.render();
-
+    for(let i=0;i<blobs.length;i++){
+      glowRenderers[i].updateFromBlob(blobs[i]);
+      bodyRenderers[i].updateFromBlob(blobs[i]);
+    }
+    renderer.render(scene,camera);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 
-  // random color button
-  document.getElementById('randomColorBtn').onclick = ()=>{
+  // random color button (with gold handling)
+  document.getElementById('colorButton').onclick = ()=>{
     blobs.forEach(b=>{
-      if(chance(1/50)){ b.is_gold = 1; b.setColors(new THREE.Vector3(1.0,0.84,0.0)); }
-      else            { b.is_gold = 0; b.setColors(new THREE.Vector3(Math.random(), Math.random(), Math.random())); }
+      if(chance(1/50)){
+        b.is_gold = 1;
+        b.setColors(new THREE.Vector3(1.0,0.84,0.0));
+      } else {
+        b.is_gold = 0;
+        b.setColors(new THREE.Vector3(Math.random(), Math.random(), Math.random()));
+      }
     });
   };
+
   </script>
 </body>
 </html>
