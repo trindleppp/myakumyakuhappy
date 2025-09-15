@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball Gold (Spherical Highlight + Outer Glow) — importmap fixed</title>
+  <title>Gold Blob — Stable Shader Glow (Dimmer) + Click Attract 3s — FULL</title>
   <style>
-    html,body { margin:0; height:100%; background:#111; }
+    html,body { margin:0; height:100%; background:#fff; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
     #colorButton {
       position: absolute;
@@ -22,11 +22,12 @@
       cursor: pointer;
       z-index: 20;
       box-shadow: 0 6px 24px rgba(199,160,255,0.25);
+      user-select: none;
     }
     #colorButton:hover { background: linear-gradient(135deg,#eee,#333); }
+    .tp-dfwv { z-index: 30; } /* tweakpane over canvas */
   </style>
 
-  <!-- import map: resolve bare specifier 'three' -->
   <script type="importmap">
   {
     "imports": {
@@ -37,19 +38,19 @@
 </head>
 <body>
   <div id="app"></div>
-  <button id="colorButton">色らんだむ</button>
+  <button id="colorButton">ランダムカラー</button>
 
   <script type="module">
   import * as THREE from "three";
   import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js";
 
-  // ===== Settings =====
+  // ===== Constants =====
   const INTERNAL_W = 1200, INTERNAL_H = 1200;
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
   const chance = p => Math.random() < p;
 
-  // ===== Shaders =====
+  // ===== Shaders (WebGL1 style for stability) =====
   const VERT = `
     precision highp float;
     attribute vec3 position;
@@ -60,142 +61,117 @@
     }
   `;
 
-  // Body shader (with spherical gold highlight)
-  const FRAG = `
+  const FIELD_FUNCS = `
     precision highp float;
-    varying vec2 vUv;
     uniform vec2 centers[32];
     uniform float radii[32];
     uniform int num_circles;
-    uniform vec3 blob_color;
+    uniform vec2 resolution;
 
+    float fieldAt(vec2 uv){
+      float f = 0.0;
+      for(int i=0;i<32;i++){
+        if(i>=num_circles) break;
+        vec2 d = uv - centers[i];
+        float d2 = dot(d,d) + 1.0;
+        float r  = radii[i];
+        f += (r*r) / d2;
+      }
+      return f;
+    }
+  `;
+
+  const FRAG = `
+    ${FIELD_FUNCS}
+    varying vec2 vUv;
+
+    uniform vec3 blob_color;
     uniform vec2 eye_center;
     uniform float eye_radius;
+    uniform vec3 eye_color;
+
     uniform vec2 pupil_center;
     uniform float pupil_radius;
-    uniform vec3 eye_color;
     uniform vec3 pupil_color;
 
-    uniform vec2 resolution;
     uniform int is_gold;
+    uniform float u_time;
+
+    float edgeGlow(vec2 uv, float iso){
+      float eps = 2.0;
+      float f  = fieldAt(uv);
+      float fx = fieldAt(uv + vec2(eps,0.0)) - fieldAt(uv - vec2(eps,0.0));
+      float fy = fieldAt(uv + vec2(0.0,eps)) - fieldAt(uv - vec2(0.0,eps));
+      float g  = sqrt(fx*fx + fy*fy) + 1e-6;
+      float d  = abs(f - iso) / g;
+      float glow = 1.0 - smoothstep(0.0, 12.0, d);
+      return pow(glow, 1.5);
+    }
 
     void main(){
-        vec2 uv = vUv * resolution;
+      vec2 uv = vUv * resolution;
+      float iso = 0.8;
+      float f = fieldAt(uv);
 
-        // metaball field
-        float field = 0.0;
-        for(int i=0;i<32;i++){
-            if(i >= num_circles) break;
-            vec2 d = uv - centers[i];
-            float d2 = dot(d,d) + 1.0;
-            float r = radii[i];
-            field += (r*r) / d2;
-        }
-        if(field <= 0.8){ discard; }
-
-        // pupil
-        if(length(uv - pupil_center) < pupil_radius){
-            if(is_gold==1){
-                vec3 g1 = vec3(1.0,0.84,0.0);
-                vec3 g2 = vec3(1.3,1.15,0.6);
-                float rp = length(uv - pupil_center)/max(pupil_radius,1.0);
-                float glow = pow(1.0 - clamp(rp,0.0,1.0), 4.0);
-                vec3 col = mix(g1*0.9, g2, glow);
-                gl_FragColor = vec4(col,1.0);
-            } else {
-                gl_FragColor = vec4(pupil_color, 1.0);
-            }
-            return;
-        }
-
-        // sclera (white)
-        if(length(uv - eye_center) < eye_radius){
-            gl_FragColor = vec4(eye_color, 1.0);
-            return;
-        }
-
-        // body
+      // pupil
+      if(distance(uv, pupil_center) < pupil_radius){
         if(is_gold==1){
-            // spherical highlight centered at the eye
-            vec2 rel = (uv - eye_center) / max(eye_radius, 1.0);
-            float r2 = dot(rel, rel);
-            float z = sqrt(max(0.0, 1.0 - min(r2, 1.0)));
-            vec3 n = normalize(vec3(rel, z));
-            vec3 L = normalize(vec3(0.6, 0.4, 0.7));
-            vec3 V = vec3(0.0, 0.0, 1.0);
-
-            float diff = max(dot(n, L), 0.0);
-            float spec = pow(max(dot(reflect(-L, n), V), 0.0), 32.0);
-            float rim = pow(1.0 - n.z, 2.0);
-
-            vec3 gold = vec3(1.0, 0.84, 0.0);
-            vec3 ambient  = gold * 0.35;
-            vec3 diffuseC = gold * (0.85 + 0.55 * diff);
-            vec3 specular = vec3(1.25, 1.15, 0.6) * spec;
-            vec3 col = ambient + diffuseC + specular;
-            col *= mix(1.0, 0.75, rim);
-            col = min(col, vec3(1.0));
-            gl_FragColor = vec4(col, 1.0);
+          vec3 g1 = vec3(1.0,0.85,0.0);
+          vec3 g2 = vec3(1.2,1.1,0.7);
+          float rp = distance(uv, pupil_center)/max(pupil_radius,1.0);
+          float glow = pow(1.0 - clamp(rp,0.0,1.0), 4.0);
+          gl_FragColor = vec4(mix(g1*0.9, g2, glow), 1.0);
         } else {
-            gl_FragColor = vec4(blob_color, 1.0);
+          gl_FragColor = vec4(pupil_color, 1.0);
         }
+        return;
+      }
+      // sclera
+      if(distance(uv, eye_center) < eye_radius){
+        gl_FragColor = vec4(eye_color, 1.0);
+        return;
+      }
+
+      // body
+      if(f > iso){
+        if(is_gold==1){
+          float eps = 2.0;
+          float fx = fieldAt(uv + vec2(eps,0.0)) - fieldAt(uv - vec2(eps,0.0));
+          float fy = fieldAt(uv + vec2(0.0,eps)) - fieldAt(uv - vec2(0.0,eps));
+          vec3 n = normalize(vec3(-fx, -fy, 2.0));
+          vec3 L = normalize(vec3(0.4, 0.6, 0.7));
+          vec3 V = vec3(0.0, 0.0, 1.0);
+          float diff = max(dot(n, L), 0.0);
+          float spec = pow(max(dot(reflect(-L, n), V), 0.0), 96.0);
+          float rim  = pow(1.0 - n.z, 2.0);
+          vec3 gold = vec3(1.0, 0.84 + 0.03*sin(u_time*2.0), 0.0);
+          vec3 ambient  = gold * 0.30;
+          vec3 diffuseC = gold * (0.70 + 0.60 * diff);
+          vec3 specular = vec3(1.3, 1.15, 0.8) * spec;
+          vec3 col = ambient + diffuseC + specular;
+          float pulse = 0.85 + 0.15 * sin(u_time*3.0);
+          col *= 1.0 + 0.15 * pulse; // dimmer than before
+          col += gold * 0.15 * rim;  // dimmer rim
+          float glow = edgeGlow(uv, iso);
+          vec3 halo = vec3(1.0, 0.9, 0.55) * glow * 0.9;
+          gl_FragColor = vec4(min(col + halo, vec3(1.0)), 1.0);
+        } else {
+          gl_FragColor = vec4(blob_color, 1.0);
+        }
+      } else {
+        if(is_gold==1){
+          float glow = edgeGlow(uv, iso);
+          vec3 halo = vec3(1.0, 0.9, 0.55) * glow * 0.6;
+          float a = glow * 0.6;
+          gl_FragColor = vec4(halo, a);
+        } else {
+          discard;
+        }
+      }
     }
   `;
 
-  // Glow shader (gold-only outer halo)
-  const FRAG_GLOW = `
-    precision highp float;
-    varying vec2 vUv;
-    uniform vec2 centers[32];
-    uniform float radii[32];
-    uniform int num_circles;
-    uniform vec2 resolution;
-    uniform int is_gold;
-    uniform vec2 eye_center;
-    uniform float eye_radius;
-
-    void main(){
-        vec2 uv = vUv * resolution;
-
-        // metaball field
-        float field = 0.0;
-        for(int i=0;i<32;i++){
-            if(i >= num_circles) break;
-            vec2 d = uv - centers[i];
-            float d2 = dot(d,d) + 1.0;
-            float r = radii[i];
-            field += (r*r) / d2;
-        }
-
-        // Only draw outside the iso-surface; build a falloff ring just outside
-        float iso = 0.8;
-        if(field >= iso){ discard; }  // inside body: no glow from this pass
-
-        // distance from edge in field space
-        float d = iso - field; // >0 outside
-        // falloff width in field units (tweakable)
-        float w1 = 0.10;
-        float w2 = 0.40;
-        float ring = smoothstep(w2, w1, d);   // 1 near edge, 0 farther
-        if(ring <= 0.001){ discard; }
-
-        // radial falloff from the eye center, so glow concentrates near the blob
-        float r = length(uv - eye_center) / max(eye_radius*2.0, 1.0);
-        float radial = clamp(1.0 - r, 0.0, 1.0);
-
-        float alpha = ring * radial * 0.7;   // intensity
-
-        // gold-ish halo color
-        vec3 halo = vec3(1.0, 0.92, 0.55);
-
-        // Only gold blobs emit glow
-        if(is_gold == 0){ discard; }
-
-        gl_FragColor = vec4(halo, alpha);
-    }
-  `;
-
-  // ===== Blob =====
+  // ===== Blob data/model =====
   class Blob {
     constructor(n=14, color=new THREE.Vector3(1,0,0), pos=new THREE.Vector2(INTERNAL_W/2, INTERNAL_H/2)){
       this.num_circles = n;
@@ -204,15 +180,16 @@
 
       // pupil color rules
       if(color.equals(new THREE.Vector3(1,0,0))){
-        this.pupil_color = new THREE.Vector3(0,0,1);       // red -> blue
+        this.pupil_color = new THREE.Vector3(0,0,1);
       } else if(color.equals(new THREE.Vector3(0,0,1))){
-        this.pupil_color = new THREE.Vector3(1,0,0);       // blue -> red
+        this.pupil_color = new THREE.Vector3(1,0,0);
       } else if(color.equals(new THREE.Vector3(0.6,0,0.8))){
-        this.pupil_color = new THREE.Vector3(0,1,0.6);     // purple -> emerald
+        this.pupil_color = new THREE.Vector3(0,1,0.6);
       } else {
-        this.pupil_color = new THREE.Vector3(1-color.x,1-color.y,1-color.z); // complement
+        this.pupil_color = new THREE.Vector3(1-color.x,1-color.y,1-color.z);
       }
 
+      // circles
       this.centers = Array.from({length:32}, ()=> new THREE.Vector2(pos.x,pos.y));
       this.radii   = new Float32Array(32);
       this.base_r  = new Float32Array(32);
@@ -231,10 +208,12 @@
       }
       this.base_avg_r = Array.from(this.base_r.slice(0,n)).reduce((a,b)=>a+b,0)/n;
 
+      // eye and pupil
       this.eye_pos = pos.clone();
       this.eye_target = this.eye_pos.clone();
       this.eye_timer = rand(0.5, 1.0);
       this.max_interval = 1.5;
+
       this.pupil_pos = pos.clone();
       this.pupil_target = pos.clone();
       this.pupil_timer = rand(1,3);
@@ -243,6 +222,7 @@
       this.eye_scale = 1.4;
       this.move_speed = 100;
 
+      // wander target
       this.blob_target = pos.clone();
       this.blob_timer  = rand(3, 7);
     }
@@ -281,7 +261,7 @@
     }
 
     update(dt, cohesion){
-      // wander target
+      // wander
       this.blob_timer -= dt;
       if(this.blob_timer <= 0){
         this.blob_target.set(rand(0,INTERNAL_W), rand(0,INTERNAL_H));
@@ -298,7 +278,7 @@
         }
       }
 
-      // per-circle wobble
+      // wobble
       for(let i=0;i<this.num_circles;i++){
         this.phase[i]+=this.speed[i]*dt;
         this.radii[i]=Math.max(2,this.base_r[i]+20*Math.sin(this.phase[i]));
@@ -317,7 +297,7 @@
         }
       }
 
-      // eye / pupil logic
+      // eye / pupil
       const { r: r_est, center } = this.estimate_radius();
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
@@ -376,7 +356,6 @@
     }
   }
 
-  // ===== Renderers =====
   class BlobRenderer {
     constructor(){
       this.material = new THREE.RawShaderMaterial({
@@ -385,6 +364,7 @@
         transparent: true,
         depthTest: false,
         depthWrite: false,
+        blending: THREE.NormalBlending,
         uniforms: {
           centers:{ value:Array.from({length:32},()=>new THREE.Vector2(0,0)) },
           radii:{ value:Array.from({length:32},()=>0.0) },
@@ -397,12 +377,14 @@
           pupil_radius:{ value:0.0 },
           pupil_color:{ value:new THREE.Vector3(0,0,0) },
           resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) },
-          is_gold:{ value:0 }
+          is_gold:{ value:0 },
+          u_time:{ value:0.0 }
         }
       });
       this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), this.material);
     }
-    updateFromBlob(blob){
+
+    updateFromBlob(blob, t){
       const u=blob.uniforms();
       this.material.uniforms.num_circles.value=u.num_circles;
       const centers=this.material.uniforms.centers.value;
@@ -415,75 +397,42 @@
       this.material.uniforms.eye_center.value.copy(u.eye_center);
       this.material.uniforms.eye_radius.value=u.eye_radius;
       this.material.uniforms.eye_color.value.copy(u.eye_color);
-      this.material.uniforms.pupil_center.value.copy(u.pupil_center);
+      this.material.uniforms.pupil_center.value=u.pupil_center;
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
-      this.material.uniforms.pupil_color.value.copy(u.pupil_color);
+      this.material.uniforms.pupil_color.value=u.pupil_color;
       this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
       this.material.uniforms.is_gold.value=u.is_gold;
+      this.material.uniforms.u_time.value=t;
     }
   }
 
-  class GlowRenderer {
-    constructor(){
-      this.material = new THREE.RawShaderMaterial({
-        vertexShader: VERT,
-        fragmentShader: FRAG_GLOW,
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
-        blending: THREE.NormalBlending,   // mix with white background
-        uniforms: {
-          centers:{ value:Array.from({length:32},()=>new THREE.Vector2(0,0)) },
-          radii:{ value:Array.from({length:32},()=>0.0) },
-          num_circles:{ value:0 },
-          resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) },
-          is_gold:{ value:0 },
-          eye_center:{ value:new THREE.Vector2(0,0) },
-          eye_radius:{ value:0.0 }
-        }
-      });
-      this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), this.material);
-    }
-    updateFromBlob(blob){
-      const u=blob.uniforms();
-      this.material.uniforms.num_circles.value=u.num_circles;
-      const centers=this.material.uniforms.centers.value;
-      const radii=this.material.uniforms.radii.value;
-      for(let i=0;i<32;i++){
-        if(i<u.num_circles){ centers[i].copy(u.centers[i]); radii[i]=u.radii[i]; }
-        else { centers[i].set(0,0); radii[i]=0.0; }
-      }
-      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
-      this.material.uniforms.is_gold.value=u.is_gold;
-      this.material.uniforms.eye_center.value.copy(u.eye_center);
-      this.material.uniforms.eye_radius.value=u.eye_radius;
-    }
-  }
-
-  // ===== Setup =====
+  // ===== Setup three.js =====
   const container = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
   container.appendChild(renderer.domElement);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
   renderer.setClearColor(0xffffff, 1);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-  function resize(){ const s=Math.min(window.innerWidth,window.innerHeight); renderer.setSize(s,s); }
-  window.addEventListener('resize', resize); resize();
+  function viewportSize(){ return Math.min(window.innerWidth, window.innerHeight); }
+  function resize(){ const s = viewportSize(); renderer.setSize(s,s); }
+  window.addEventListener('resize', resize);
+  resize();
 
+  // ===== Blobs and renderers =====
   const blobs = [
     new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.3, INTERNAL_H*0.6)),
     new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.7, INTERNAL_H*0.7)),
     new Blob(14,new THREE.Vector3(0.6,0,0.8), new THREE.Vector2(INTERNAL_W*0.5, INTERNAL_H*0.4)),
   ];
   const bodyRenderers = blobs.map(()=> new BlobRenderer());
-  const glowRenderers = blobs.map(()=> new GlowRenderer());
-
-  // Draw order: glow then body
-  glowRenderers.forEach(r=> scene.add(r.mesh));
   bodyRenderers.forEach(r=> scene.add(r.mesh));
 
-  // UI
+  // ===== UI =====
   const pane=new Pane({title:'Controls'});
   const params={ eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:2.0 };
   pane.addBinding(params,'eye_range',{min:10,max:200,step:1,label:'目の範囲'});
@@ -494,7 +443,7 @@
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1,label:'移動速度'});
   pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1,label:'まとまり'});
 
-  // inter-blob forces
+  // ===== Forces between blobs =====
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -517,10 +466,13 @@
     }
   }
 
-  // loop
+  // ===== Main loop =====
+  let t0 = performance.now();
   let last=performance.now();
   function tick(now){
     const dt=Math.min(0.05,(now-last)/1000); last=now;
+    const t = (now - t0) / 1000.0;
+
     for(const b of blobs){
       b.max_interval = params.interval;
       b.eye_range = params.eye_range;
@@ -534,15 +486,15 @@
       }
     }
     for(let i=0;i<blobs.length;i++){
-      glowRenderers[i].updateFromBlob(blobs[i]);
-      bodyRenderers[i].updateFromBlob(blobs[i]);
+      bodyRenderers[i].updateFromBlob(blobs[i], t);
     }
-    renderer.render(scene,camera);
+
+    renderer.render(scene, camera);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 
-  // random color button (with gold handling)
+  // ===== Buttons / interactions =====
   document.getElementById('colorButton').onclick = ()=>{
     blobs.forEach(b=>{
       if(chance(1/50)){
@@ -554,6 +506,27 @@
       }
     });
   };
+
+  function toInternalXY(e){
+    const rect = renderer.domElement.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width  * INTERNAL_W;
+    const y = (1 - (e.clientY - rect.top) / rect.height) * INTERNAL_H;
+    return new THREE.Vector2(x,y);
+  }
+  // Click attract: 3 seconds
+  renderer.domElement.addEventListener('click', (e)=>{
+    const p = toInternalXY(e);
+    blobs.forEach(b=>{ b.blob_target.copy(p); b.blob_timer = 3.0; });
+  });
+  // Touch attract: same behavior
+  renderer.domElement.addEventListener('touchstart', (e)=>{
+    const t = e.touches[0];
+    const rect = renderer.domElement.getBoundingClientRect();
+    const x = (t.clientX - rect.left) / rect.width  * INTERNAL_W;
+    const y = (1 - (t.clientY - rect.top) / rect.height) * INTERNAL_H;
+    const p = new THREE.Vector2(x,y);
+    blobs.forEach(b=>{ b.blob_target.copy(p); b.blob_timer = 6.0; });
+  }, {passive:true});
 
   </script>
 </body>
