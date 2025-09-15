@@ -105,27 +105,27 @@
         }
 
         // body
-        if(is_gold==1){
-            vec2 toC = uv - eye_center;
-            float dist = length(toC);
-            float r = dist / max(eye_radius*1.6, 1.0);
-            float radial = clamp(1.0 - r, 0.0, 1.0);
-            radial = radial*radial;
+        if(isGold == 1){
+    vec2 toCenter = uv - eye_center;
+    float dist = length(toCenter) / 400.0;
 
-            float dark = smoothstep(0.6, 1.0, r);
+    // 放射グラデーション：中心明るい、外側暗い
+    float radial = smoothstep(0.0, 1.0, dist);
 
-            vec2 lightDir = normalize(vec2(0.7, 0.5));
-            float ndl = max(dot(normalize(toC + 1e-5), lightDir), 0.0);
-            float shine = pow(ndl, 8.0);
+    // 少し広めのハイライト
+    float shine = pow(max(dot(normalize(toCenter), normalize(vec2(0.7, 0.5))), 0.0), 5.0);
 
-            vec3 base = vec3(1.0, 0.84, 0.0) * mix(1.0, 0.7, dark);
-            vec3 high = vec3(1.25, 1.15, 0.55);
-            vec3 col = mix(base, high, radial) + shine * vec3(1.4, 1.2, 0.7);
+    vec3 gold = vec3(1.0, 0.84, 0.0);
 
-            gl_FragColor = vec4(col, 1.0);
-        } else {
-            gl_FragColor = vec4(blob_color, 1.0);
-        }
+    // 全体的に光ってるベース
+    vec3 col = mix(gold*0.8, gold*1.5, 1.0-radial);
+
+    // ハイライトを足す（柔らかめ）
+    col += shine * vec3(1.2, 1.0, 0.5);
+
+    gl_FragColor = vec4(col, 1.0);
+    return;
+}
     }
   `;
 
