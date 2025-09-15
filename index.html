@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball Metallic Gold (Radial Highlight)</title>
+  <title>Blob Metaball Metallic Gold (Glow)</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
@@ -81,16 +81,14 @@
         }
         if(field <= 0.8){ discard; }
 
-        // pupil (gold pupil uses its own highlight)
+        // pupil (gold pupil uses glow too)
         if(length(uv - pupil_center) < pupil_radius){
             if(is_gold==1){
                 vec3 g1 = vec3(1.0,0.84,0.0);
-                vec3 g2 = vec3(1.25,1.15,0.55);
+                vec3 g2 = vec3(1.4,1.2,0.6);
                 float rp = length(uv - pupil_center)/max(pupil_radius,1.0);
-                float rim = smoothstep(0.7, 1.0, rp);
-                float shine = pow(1.0 - rp, 6.0);
-                vec3 col = mix(g1,g2,shine);
-                col *= mix(1.0, 0.75, rim); // slight rim darkening
+                float glow = pow(1.0 - clamp(rp,0.0,1.0), 4.0);
+                vec3 col = mix(g1*0.9, g2, glow);
                 gl_FragColor = vec4(col,1.0);
             } else {
                 gl_FragColor = vec4(pupil_color, 1.0);
@@ -105,27 +103,27 @@
         }
 
         // body
-        if(isGold == 1){
-    vec2 toCenter = uv - eye_center;
-    float dist = length(toCenter) / 400.0;
+        if(is_gold==1){
+            // overall glow + soft directional highlight + darker rim
+            vec2 toC = uv - eye_center;
+            float dist = length(toC);
+            float r = dist / max(eye_radius*1.8, 1.0);
+            float radial = smoothstep(1.0, 0.0, clamp(r,0.0,1.2)); // center brighter, outer darker
 
-    // 放射グラデーション：中心明るい、外側暗い
-    float radial = smoothstep(0.0, 1.0, dist);
+            // soft highlight spread
+            vec2 lightDir = normalize(vec2(0.7, 0.5));
+            float ndl = max(dot(normalize(toC + 1e-5), lightDir), 0.0);
+            float shine = pow(ndl, 5.0); // softer than before
 
-    // 少し広めのハイライト
-    float shine = pow(max(dot(normalize(toCenter), normalize(vec2(0.7, 0.5))), 0.0), 5.0);
+            // base and highlight colors
+            vec3 gold = vec3(1.0, 0.84, 0.0);
+            vec3 col = mix(gold*0.8, gold*1.5, radial);
+            col += shine * vec3(1.2, 1.0, 0.5);
 
-    vec3 gold = vec3(1.0, 0.84, 0.0);
-
-    // 全体的に光ってるベース
-    vec3 col = mix(gold*0.8, gold*1.5, 1.0-radial);
-
-    // ハイライトを足す（柔らかめ）
-    col += shine * vec3(1.2, 1.0, 0.5);
-
-    gl_FragColor = vec4(col, 1.0);
-    return;
-}
+            gl_FragColor = vec4(col, 1.0);
+        } else {
+            gl_FragColor = vec4(blob_color, 1.0);
+        }
     }
   `;
 
@@ -136,7 +134,7 @@
       this.color = color;
       this.is_gold = 0;
 
-      // pupil color rules (fixed for initial three)
+      // pupil color rules
       if(color.equals(new THREE.Vector3(1,0,0))){
         this.pupil_color = new THREE.Vector3(0,0,1);       // red -> blue
       } else if(color.equals(new THREE.Vector3(0,0,1))){
@@ -168,6 +166,7 @@
       this.eye_pos = pos.clone();
       this.eye_target = this.eye_pos.clone();
       this.eye_timer = rand(0.5, 1.0);
+      this.max_interval = 1.5;
       this.pupil_pos = pos.clone();
       this.pupil_target = pos.clone();
       this.pupil_timer = rand(1,3);
@@ -260,7 +259,7 @@
         const allow=Math.min(r_est,this.eye_range);
         const ang=rand(0,TAU), rad=rand(0,allow);
         this.eye_target.copy(center).add(new THREE.Vector2(Math.cos(ang)*rad, Math.sin(ang)*rad));
-        this.eye_timer=1.0;
+        this.eye_timer=this.max_interval;
       }
       this.eye_pos.add(this.eye_target.clone().sub(this.eye_pos).multiplyScalar(0.08));
 
@@ -351,6 +350,7 @@
       this.material.uniforms.pupil_center.value.copy(u.pupil_center);
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
       this.material.uniforms.pupil_color.value.copy(u.pupil_color);
+      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
       this.material.uniforms.is_gold.value=u.is_gold;
     }
   }
@@ -385,6 +385,7 @@
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1,label:'移動速度'});
   pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1,label:'まとまり'});
 
+  // inter-blob forces
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -407,12 +408,13 @@
     }
   }
 
+  // loop
   let last=performance.now();
   function tick(now){
     const dt=Math.min(0.05,(now-last)/1000); last=now;
     for(const b of blobs){
-      b.eye_range = params.eye_range;
       b.max_interval = params.interval;
+      b.eye_range = params.eye_range;
       b.eye_scale = params.eye_scale;
       b.move_speed = params.move_speed;
       b.update(dt, params.cohesion);
@@ -433,7 +435,7 @@
     blobs.forEach(b=>{
       if(chance(1/50)){
         b.is_gold = 1;
-        b.setColors(new THREE.Vector3(1.0,0.84,0.0)); // body hint color (unused in shader when gold, but kept)
+        b.setColors(new THREE.Vector3(1.0,0.84,0.0)); // body hint color
       } else {
         b.is_gold = 0;
         b.setColors(new THREE.Vector3(Math.random(), Math.random(), Math.random()));
