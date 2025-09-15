@@ -3,35 +3,37 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (Random Color + Complementary Pupil)</title>
+  <title>Blob Metaball Metallic Gold (Stable)</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
-    #colorBtn {
-      position: fixed;
+    #colorButton {
+      position: absolute;
       bottom: 10px;
       left: 50%;
       transform: translateX(-50%);
-      padding: 10px 20px;
-      border: 2px solid #a5a;
+      padding: 12px 24px;
+      border: 2px solid #c7a0ff;
       border-radius: 12px;
-      background: linear-gradient(90deg, #fff, #000);
+      background: linear-gradient(135deg,#fff,#000);
       color: #fff;
+      font-size: 16px;
       font-weight: bold;
       cursor: pointer;
-      z-index: 10;
+      z-index: 20;
     }
+    #colorButton:hover { background: linear-gradient(135deg,#eee,#333); }
   </style>
 </head>
 <body>
   <div id="app"></div>
-  <button id="colorBtn">ランダムカラー</button>
+  <button id="colorButton">ランダムカラー</button>
 
   <script type="module">
   import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
   import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js";
 
-  // ===== Config =====
+  // ===== Settings =====
   const INTERNAL_W = 1200, INTERNAL_H = 1200;
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
@@ -67,6 +69,8 @@
 
     void main(){
         vec2 uv = vUv * resolution;
+
+        // build field for metaball
         float field = 0.0;
         for(int i=0;i<32;i++){
             if(i >= num_circles) break;
@@ -77,33 +81,59 @@
         }
         if(field <= 0.8){ discard; }
 
+        // pupil first (gold pupil if gold)
         if(length(uv - pupil_center) < pupil_radius){
             if(is_gold==1){
-              gl_FragColor = vec4(1.0,0.9,0.2,1.0);
+                vec3 g1 = vec3(1.0,0.84,0.0);
+                vec3 g2 = vec3(1.2,1.1,0.6);
+                float rp = length(uv - pupil_center)/max(pupil_radius,1.0);
+                float t = 1.0 - smoothstep(0.0,1.0,rp);
+                vec3 col = mix(g1,g2,t);
+                gl_FragColor = vec4(col,1.0);
             } else {
-              gl_FragColor = vec4(pupil_color, 1.0);
+                gl_FragColor = vec4(pupil_color, 1.0);
             }
             return;
         }
+
+        // sclera stays white even in gold
         if(length(uv - eye_center) < eye_radius){
-            gl_FragColor = vec4(eye_color, 1.0); return;
+            gl_FragColor = vec4(eye_color, 1.0);
+            return;
         }
+
+        // body
         if(is_gold==1){
-          float glow = 0.5 + 0.5*sin(uv.x*0.05+uv.y*0.05);
-          gl_FragColor = vec4(blob_color*glow,1.0);
+            // radial highlight around eye_center for metallic look
+            float r = length(uv - eye_center) / max(eye_radius*1.5, 1.0);
+            float radial = clamp(1.0 - r, 0.0, 1.0);
+            radial = pow(radial, 2.0);
+            vec3 base_gold = vec3(1.0, 0.84, 0.0);
+            vec3 highlight = vec3(1.25, 1.15, 0.55);
+            vec3 color = mix(base_gold, highlight, radial);
+            gl_FragColor = vec4(color, 1.0);
         } else {
-          gl_FragColor = vec4(blob_color, 1.0);
+            gl_FragColor = vec4(blob_color, 1.0);
         }
     }
   `;
-    // ===== Blob Class =====
+  // ===== Blob =====
   class Blob {
     constructor(n=14, color=new THREE.Vector3(1,0,0), pos=new THREE.Vector2(INTERNAL_W/2, INTERNAL_H/2)){
       this.num_circles = n;
       this.color = color;
-      this.is_gold = chance(1/50) ? 1 : 0;
+      this.is_gold = 0;
 
-      this.setColors(color);
+      // pupil color rules
+      if(color.equals(new THREE.Vector3(1,0,0))){
+        this.pupil_color = new THREE.Vector3(0,0,1);       // red -> blue
+      } else if(color.equals(new THREE.Vector3(0,0,1))){
+        this.pupil_color = new THREE.Vector3(1,0,0);       // blue -> red
+      } else if(color.equals(new THREE.Vector3(0.6,0,0.8))){
+        this.pupil_color = new THREE.Vector3(0,1,0.6);     // purple -> emerald
+      } else {
+        this.pupil_color = new THREE.Vector3(1-color.x,1-color.y,1-color.z); // complement
+      }
 
       this.centers = Array.from({length:32}, ()=> new THREE.Vector2(pos.x,pos.y));
       this.radii   = new Float32Array(32);
@@ -133,11 +163,13 @@
       this.eye_range = 30;
       this.eye_scale = 1.4;
       this.move_speed = 100;
+
       this.blob_target = pos.clone();
-      this.blob_timer  = rand(3,7);
+      this.blob_timer  = rand(3, 7);
     }
 
     setColors(newColor){
+      // keep current gold flag logic outside
       this.color = newColor;
       if(this.is_gold){
         this.pupil_color = new THREE.Vector3(1.0,0.84,0.0);
@@ -151,6 +183,7 @@
         this.pupil_color = new THREE.Vector3(1-newColor.x,1-newColor.y,1-newColor.z);
       }
     }
+
     estimate_radius(){
       let cx=0, cy=0;
       for(let i=0;i<this.num_circles;i++){ cx+=this.centers[i].x; cy+=this.centers[i].y; }
@@ -168,24 +201,25 @@
       this.eye_pos.add(f);
       for(let i=0;i<this.num_circles;i++) this.centers[i].add(f);
     }
-
     update(dt, cohesion){
+      // wander to target
       this.blob_timer -= dt;
       if(this.blob_timer <= 0){
         this.blob_target.set(rand(0,INTERNAL_W), rand(0,INTERNAL_H));
-        this.blob_timer = rand(3,7);
+        this.blob_timer = rand(3, 7);
       }
       {
         const dx=this.blob_target.x - this.eye_pos.x;
         const dy=this.blob_target.y - this.eye_pos.y;
         const d=Math.hypot(dx,dy);
         if(d>1e-3){
-          const step=Math.min(this.move_speed*dt*0.5,d);
-          const move=new THREE.Vector2(dx/d*step, dy/d*step);
+          const step = Math.min(this.move_speed*dt*0.5, d);
+          const move = new THREE.Vector2(dx/d*step, dy/d*step);
           this.apply_force(move);
         }
       }
 
+      // wobble parts
       for(let i=0;i<this.num_circles;i++){
         this.phase[i]+=this.speed[i]*dt;
         this.radii[i]=Math.max(2,this.base_r[i]+20*Math.sin(this.phase[i]));
@@ -204,7 +238,8 @@
         }
       }
 
-      const {r:r_est, center} = this.estimate_radius();
+      // eye and pupil
+      const { r: r_est, center } = this.estimate_radius();
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
 
@@ -212,7 +247,7 @@
       if(this.eye_timer<=0){
         const allow=Math.min(r_est,this.eye_range);
         const ang=rand(0,TAU), rad=rand(0,allow);
-        this.eye_target.copy(center).add(new THREE.Vector2(Math.cos(ang)*rad,Math.sin(ang)*rad));
+        this.eye_target.copy(center).add(new THREE.Vector2(Math.cos(ang)*rad, Math.sin(ang)*rad));
         this.eye_timer=1.0;
       }
       this.eye_pos.add(this.eye_target.clone().sub(this.eye_pos).multiplyScalar(0.08));
@@ -230,14 +265,15 @@
         this.pupil_pos.copy(this.eye_pos).add(v);
       }
 
+      // cohesion toward center
       for(let i=0;i<this.num_circles;i++){
-        const dx=center.x-this.centers[i].x;
-        const dy=center.y-this.centers[i].y;
-        const dist=Math.hypot(dx,dy);
-        if(dist>20){
-          const step=Math.min(this.move_speed*dt*0.4*cohesion,dist);
-          this.centers[i].x+=dx/dist*step;
-          this.centers[i].y+=dy/dist*step;
+        const dx = center.x - this.centers[i].x;
+        const dy = center.y - this.centers[i].y;
+        const dist = Math.hypot(dx,dy);
+        if(dist > 20){
+          const step = Math.min(this.move_speed*dt*0.4*cohesion, dist);
+          this.centers[i].x += dx/dist*step;
+          this.centers[i].y += dy/dist*step;
         }
       }
     }
@@ -260,43 +296,41 @@
       };
     }
   }
-    // ===== BlobRenderer, Setup, Loop =====
+
+  // ===== Renderer =====
   class BlobRenderer {
     constructor(){
-      this.material=new THREE.RawShaderMaterial({
-        vertexShader:VERT,
-        fragmentShader:FRAG,
-        transparent:true,
-        depthTest:false,
-        depthWrite:false,
-        uniforms:{
-          centers:{value:Array.from({length:32},()=>new THREE.Vector2(0,0))},
-          radii:{value:Array.from({length:32},()=>0.0)},
-          num_circles:{value:0},
-          blob_color:{value:new THREE.Vector3(1,0,0)},
-          eye_center:{value:new THREE.Vector2(0,0)},
-          eye_radius:{value:0.0},
-          eye_color:{value:new THREE.Vector3(1,1,1)},
-          pupil_center:{value:new THREE.Vector2(0,0)},
-          pupil_radius:{value:0.0},
-          pupil_color:{value:new THREE.Vector3(0,0,0)},
-          resolution:{value:new THREE.Vector2(INTERNAL_W,INTERNAL_H)},
-          is_gold:{value:0}
+      this.material = new THREE.RawShaderMaterial({
+        vertexShader: VERT,
+        fragmentShader: FRAG,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+          centers:{ value:Array.from({length:32},()=>new THREE.Vector2(0,0)) },
+          radii:{ value:Array.from({length:32},()=>0.0) },
+          num_circles:{ value:0 },
+          blob_color:{ value:new THREE.Vector3(1,0,0) },
+          eye_center:{ value:new THREE.Vector2(0,0) },
+          eye_radius:{ value:0.0 },
+          eye_color:{ value:new THREE.Vector3(1,1,1) },
+          pupil_center:{ value:new THREE.Vector2(0,0) },
+          pupil_radius:{ value:0.0 },
+          pupil_color:{ value:new THREE.Vector3(0,0,0) },
+          resolution:{ value:new THREE.Vector2(INTERNAL_W,INTERNAL_H) },
+          is_gold:{ value:0 }
         }
       });
-      this.mesh=new THREE.Mesh(new THREE.PlaneGeometry(2,2),this.material);
+      this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), this.material);
     }
     updateFromBlob(blob){
       const u=blob.uniforms();
       this.material.uniforms.num_circles.value=u.num_circles;
+      const centers=this.material.uniforms.centers.value;
+      const radii=this.material.uniforms.radii.value;
       for(let i=0;i<32;i++){
-        if(i<u.num_circles){
-          this.material.uniforms.centers.value[i].copy(u.centers[i]);
-          this.material.uniforms.radii.value[i]=u.radii[i];
-        }else{
-          this.material.uniforms.centers.value[i].set(0,0);
-          this.material.uniforms.radii.value[i]=0.0;
-        }
+        if(i<u.num_circles){ centers[i].copy(u.centers[i]); radii[i]=u.radii[i]; }
+        else { centers[i].set(0,0); radii[i]=0.0; }
       }
       this.material.uniforms.blob_color.value.copy(u.blob_color);
       this.material.uniforms.eye_center.value.copy(u.eye_center);
@@ -305,38 +339,41 @@
       this.material.uniforms.pupil_center.value.copy(u.pupil_center);
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
       this.material.uniforms.pupil_color.value.copy(u.pupil_color);
+      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
       this.material.uniforms.is_gold.value=u.is_gold;
     }
   }
-
-  const container=document.getElementById('app');
-  const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
+  // ===== Setup =====
+  const container = document.getElementById('app');
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
   container.appendChild(renderer.domElement);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2.0));
-  renderer.setClearColor(0xffffff,1);
-  const scene=new THREE.Scene();
-  const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-  function resize(){const s=Math.min(window.innerWidth,window.innerHeight);renderer.setSize(s,s);}
-  window.addEventListener('resize',resize); resize();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+  renderer.setClearColor(0xffffff, 1);
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  function resize(){ const s=Math.min(window.innerWidth,window.innerHeight); renderer.setSize(s,s); }
+  window.addEventListener('resize', resize); resize();
 
-  const blobs=[
-    new Blob(14,new THREE.Vector3(1,0,0),new THREE.Vector2(INTERNAL_W*0.3,INTERNAL_H*0.6)),
-    new Blob(14,new THREE.Vector3(0,0,1),new THREE.Vector2(INTERNAL_W*0.7,INTERNAL_H*0.7)),
-    new Blob(14,new THREE.Vector3(0.6,0,0.8),new THREE.Vector2(INTERNAL_W*0.5,INTERNAL_H*0.4))
+  const blobs = [
+    new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.3, INTERNAL_H*0.6)),
+    new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.7, INTERNAL_H*0.7)),
+    new Blob(14,new THREE.Vector3(0.6,0,0.8), new THREE.Vector2(INTERNAL_W*0.5, INTERNAL_H*0.4)),
   ];
-  const renderers=blobs.map(()=>new BlobRenderer());
-  renderers.forEach(r=>scene.add(r.mesh));
+  const renderers = blobs.map(()=> new BlobRenderer());
+  renderers.forEach(r=> scene.add(r.mesh));
 
+  // UI
   const pane=new Pane({title:'Controls'});
-  const params={eye_range:30,interval:1.5,eye_scale:1.4,attract:10,repel:10,move_speed:100,cohesion:1.5};
-  pane.addBinding(params,'eye_range',{min:10,max:200});
-  pane.addBinding(params,'interval',{min:0.5,max:5});
-  pane.addBinding(params,'eye_scale',{min:1,max:3});
-  pane.addBinding(params,'attract',{min:0,max:100});
-  pane.addBinding(params,'repel',{min:0,max:150});
-  pane.addBinding(params,'move_speed',{min:20,max:200});
-  pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1});
+  const params={ eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:1.5 };
+  pane.addBinding(params,'eye_range',{min:10,max:200,step:1,label:'目の範囲'});
+  pane.addBinding(params,'interval',{min:0.5,max:5,step:0.1,label:'目移動間隔'});
+  pane.addBinding(params,'eye_scale',{min:1,max:3,step:0.05,label:'目サイズ'});
+  pane.addBinding(params,'attract',{min:0,max:100,step:1,label:'引力'});
+  pane.addBinding(params,'repel',{min:0,max:150,step:1,label:'斥力'});
+  pane.addBinding(params,'move_speed',{min:20,max:200,step:1,label:'移動速度'});
+  pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1,label:'まとまり'});
 
+  // inter-blob forces
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -359,23 +396,37 @@
     }
   }
 
+  // loop
   let last=performance.now();
   function tick(now){
     const dt=Math.min(0.05,(now-last)/1000); last=now;
-    for(const b of blobs){ b.update(dt,params.cohesion); }
-    for(let i=0;i<blobs.length;i++){ for(let j=i+1;j<blobs.length;j++){ applyForces(blobs[i],blobs[j],dt,params.attract,params.repel); } }
+    for(const b of blobs){
+      b.update(dt, params.cohesion);
+    }
+    for(let i=0;i<blobs.length;i++){
+      for(let j=i+1;j<blobs.length;j++){
+        applyForces(blobs[i],blobs[j],dt,params.attract,params.repel);
+      }
+    }
     for(let i=0;i<blobs.length;i++) renderers[i].updateFromBlob(blobs[i]);
     renderer.render(scene,camera);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 
-  document.getElementById("colorBtn").onclick=()=>{
+  // random color button (with proper gold handling)
+  document.getElementById('colorButton').onclick = ()=>{
     blobs.forEach(b=>{
-      b.is_gold = chance(1/50)?1:0;
-      b.setColors(new THREE.Vector3(Math.random(), Math.random(), Math.random()));
+      if(chance(1/50)){
+        b.is_gold = 1;
+        b.setColors(new THREE.Vector3(1.0,0.84,0.0)); // body gold color hint
+      } else {
+        b.is_gold = 0;
+        b.setColors(new THREE.Vector3(Math.random(), Math.random(), Math.random()));
+      }
     });
   };
+
   </script>
 </body>
 </html>
