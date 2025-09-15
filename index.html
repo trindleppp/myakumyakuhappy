@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball Metallic Gold (Stable)</title>
+  <title>Blob Metaball Metallic Gold (Radial Highlight)</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
@@ -70,7 +70,7 @@
     void main(){
         vec2 uv = vUv * resolution;
 
-        // build field for metaball
+        // metaball field
         float field = 0.0;
         for(int i=0;i<32;i++){
             if(i >= num_circles) break;
@@ -81,14 +81,16 @@
         }
         if(field <= 0.8){ discard; }
 
-        // pupil first (gold pupil if gold)
+        // pupil (gold pupil uses its own highlight)
         if(length(uv - pupil_center) < pupil_radius){
             if(is_gold==1){
                 vec3 g1 = vec3(1.0,0.84,0.0);
-                vec3 g2 = vec3(1.2,1.1,0.6);
+                vec3 g2 = vec3(1.25,1.15,0.55);
                 float rp = length(uv - pupil_center)/max(pupil_radius,1.0);
-                float t = 1.0 - smoothstep(0.0,1.0,rp);
-                vec3 col = mix(g1,g2,t);
+                float rim = smoothstep(0.7, 1.0, rp);
+                float shine = pow(1.0 - rp, 6.0);
+                vec3 col = mix(g1,g2,shine);
+                col *= mix(1.0, 0.75, rim); // slight rim darkening
                 gl_FragColor = vec4(col,1.0);
             } else {
                 gl_FragColor = vec4(pupil_color, 1.0);
@@ -96,7 +98,7 @@
             return;
         }
 
-        // sclera stays white even in gold
+        // sclera (always white)
         if(length(uv - eye_center) < eye_radius){
             gl_FragColor = vec4(eye_color, 1.0);
             return;
@@ -104,19 +106,29 @@
 
         // body
         if(is_gold==1){
-            // radial highlight around eye_center for metallic look
-            float r = length(uv - eye_center) / max(eye_radius*1.5, 1.0);
+            vec2 toC = uv - eye_center;
+            float dist = length(toC);
+            float r = dist / max(eye_radius*1.6, 1.0);
             float radial = clamp(1.0 - r, 0.0, 1.0);
-            radial = pow(radial, 2.0);
-            vec3 base_gold = vec3(1.0, 0.84, 0.0);
-            vec3 highlight = vec3(1.25, 1.15, 0.55);
-            vec3 color = mix(base_gold, highlight, radial);
-            gl_FragColor = vec4(color, 1.0);
+            radial = radial*radial;
+
+            float dark = smoothstep(0.6, 1.0, r);
+
+            vec2 lightDir = normalize(vec2(0.7, 0.5));
+            float ndl = max(dot(normalize(toC + 1e-5), lightDir), 0.0);
+            float shine = pow(ndl, 8.0);
+
+            vec3 base = vec3(1.0, 0.84, 0.0) * mix(1.0, 0.7, dark);
+            vec3 high = vec3(1.25, 1.15, 0.55);
+            vec3 col = mix(base, high, radial) + shine * vec3(1.4, 1.2, 0.7);
+
+            gl_FragColor = vec4(col, 1.0);
         } else {
             gl_FragColor = vec4(blob_color, 1.0);
         }
     }
   `;
+
   // ===== Blob =====
   class Blob {
     constructor(n=14, color=new THREE.Vector3(1,0,0), pos=new THREE.Vector2(INTERNAL_W/2, INTERNAL_H/2)){
@@ -124,7 +136,7 @@
       this.color = color;
       this.is_gold = 0;
 
-      // pupil color rules
+      // pupil color rules (fixed for initial three)
       if(color.equals(new THREE.Vector3(1,0,0))){
         this.pupil_color = new THREE.Vector3(0,0,1);       // red -> blue
       } else if(color.equals(new THREE.Vector3(0,0,1))){
@@ -169,7 +181,6 @@
     }
 
     setColors(newColor){
-      // keep current gold flag logic outside
       this.color = newColor;
       if(this.is_gold){
         this.pupil_color = new THREE.Vector3(1.0,0.84,0.0);
@@ -201,8 +212,9 @@
       this.eye_pos.add(f);
       for(let i=0;i<this.num_circles;i++) this.centers[i].add(f);
     }
+
     update(dt, cohesion){
-      // wander to target
+      // wander target
       this.blob_timer -= dt;
       if(this.blob_timer <= 0){
         this.blob_target.set(rand(0,INTERNAL_W), rand(0,INTERNAL_H));
@@ -219,7 +231,7 @@
         }
       }
 
-      // wobble parts
+      // per-circle wobble
       for(let i=0;i<this.num_circles;i++){
         this.phase[i]+=this.speed[i]*dt;
         this.radii[i]=Math.max(2,this.base_r[i]+20*Math.sin(this.phase[i]));
@@ -238,7 +250,7 @@
         }
       }
 
-      // eye and pupil
+      // eye / pupil logic
       const { r: r_est, center } = this.estimate_radius();
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
@@ -339,10 +351,10 @@
       this.material.uniforms.pupil_center.value.copy(u.pupil_center);
       this.material.uniforms.pupil_radius.value=u.pupil_radius;
       this.material.uniforms.pupil_color.value.copy(u.pupil_color);
-      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
       this.material.uniforms.is_gold.value=u.is_gold;
     }
   }
+
   // ===== Setup =====
   const container = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
@@ -373,7 +385,6 @@
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1,label:'移動速度'});
   pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1,label:'まとまり'});
 
-  // inter-blob forces
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -396,11 +407,14 @@
     }
   }
 
-  // loop
   let last=performance.now();
   function tick(now){
     const dt=Math.min(0.05,(now-last)/1000); last=now;
     for(const b of blobs){
+      b.eye_range = params.eye_range;
+      b.max_interval = params.interval;
+      b.eye_scale = params.eye_scale;
+      b.move_speed = params.move_speed;
       b.update(dt, params.cohesion);
     }
     for(let i=0;i<blobs.length;i++){
@@ -414,12 +428,12 @@
   }
   requestAnimationFrame(tick);
 
-  // random color button (with proper gold handling)
+  // random color button (with gold handling)
   document.getElementById('colorButton').onclick = ()=>{
     blobs.forEach(b=>{
       if(chance(1/50)){
         b.is_gold = 1;
-        b.setColors(new THREE.Vector3(1.0,0.84,0.0)); // body gold color hint
+        b.setColors(new THREE.Vector3(1.0,0.84,0.0)); // body hint color (unused in shader when gold, but kept)
       } else {
         b.is_gold = 0;
         b.setColors(new THREE.Vector3(Math.random(), Math.random(), Math.random()));
