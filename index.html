@@ -485,7 +485,7 @@
 
   // UI
   const pane=new Pane({title:'Controls'});
-  const params={ eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:1.5 };
+  const params={ eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:2.0 };
   pane.addBinding(params,'eye_range',{min:10,max:200,step:1,label:'目の範囲'});
   pane.addBinding(params,'interval',{min:0.5,max:5,step:0.1,label:'目移動間隔'});
   pane.addBinding(params,'eye_scale',{min:1,max:3,step:0.05,label:'目サイズ'});
