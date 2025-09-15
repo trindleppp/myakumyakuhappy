@@ -516,7 +516,7 @@
   // Click attract: 3 seconds
   renderer.domElement.addEventListener('click', (e)=>{
     const p = toInternalXY(e);
-    blobs.forEach(b=>{ b.blob_target.copy(p); b.blob_timer = 3.0; });
+    blobs.forEach(b=>{ b.blob_target.copy(p); b.blob_timer = 6.0; });
   });
   // Touch attract: same behavior
   renderer.domElement.addEventListener('touchstart', (e)=>{
